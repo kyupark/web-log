@@ -1,0 +1,10 @@
+# Binaries (at root level only)
+/web-log
+*.exe
+
+# macOS
+.DS_Store
+
+# Trash
+TRASH/
+TRASH-FILES.md

@@ -2,6 +2,7 @@ package summary
 
 import (
 	"fmt"
+	"html"
 	"sort"
 	"strings"
 	"time"
@@ -10,64 +11,144 @@ import (
 )
 
 func TagsSummary(entries []history.Entry, startDate, endDate string, days int) (string, error) {
-	prompt := buildPrompt(entries, startDate, endDate, days)
-	return callGemini(prompt)
+	// Filter out noise (domain-level only)
+	filtered := make([]history.Entry, 0, len(entries))
+	for _, entry := range entries {
+		domain := normalizeDomain(entry.URL)
+		// Skip by domain
+		if domain == "mail.google.com" ||
+			domain == "accounts.google.com" ||
+			strings.HasPrefix(domain, "auth.") ||
+			strings.HasPrefix(domain, "login.") ||
+			strings.HasPrefix(domain, "sso.") {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+
+	prompt := buildPrompt(filtered, startDate, endDate, days)
+	return callOpenRouter(prompt)
 }
 
 func buildPrompt(entries []history.Entry, startDate, endDate string, days int) string {
-	byDomain := map[string][]string{}
+	// Group entries by date
+	byDate := map[string][]history.Entry{}
 	for _, entry := range entries {
-		domain := normalizeDomain(entry.URL)
-		if domain == "" {
-			continue
-		}
-		title := strings.TrimSpace(entry.Title)
-		if title == "" {
-			title = entry.URL
-		}
-		title = shortenTitle(title, 120)
-		if !contains(byDomain[domain], title) {
-			byDomain[domain] = append(byDomain[domain], title)
-		}
+		date := entry.VisitTime.Format("2006-01-02")
+		byDate[date] = append(byDate[date], entry)
 	}
 
-	domains := make([]string, 0, len(byDomain))
-	for domain := range byDomain {
-		domains = append(domains, domain)
+	// Sort dates
+	dates := make([]string, 0, len(byDate))
+	for date := range byDate {
+		dates = append(dates, date)
 	}
-	sort.Strings(domains)
+	sort.Strings(dates)
 
-	lines := []string{
-		fmt.Sprintf("Browsing history from %s to %s (%d days):", startDate, endDate, days),
-		"",
-	}
-	for _, domain := range domains {
-		lines = append(lines, "- "+domain)
-		for _, title := range byDomain[domain] {
-			lines = append(lines, "  - "+title)
+	var lines []string
+	lines = append(lines, fmt.Sprintf("Browsing history from %s to %s (%d days):", startDate, endDate, days))
+	lines = append(lines, "")
+
+	for _, date := range dates {
+		lines = append(lines, "## "+date)
+		lines = append(lines, "time | url | title")
+		lines = append(lines, "--- | --- | ---")
+
+		// Sort entries by time within the day
+		dayEntries := byDate[date]
+		sort.Slice(dayEntries, func(i, j int) bool {
+			return dayEntries[i].VisitTime.Before(dayEntries[j].VisitTime)
+		})
+
+		for _, entry := range dayEntries {
+			timeStr := entry.VisitTime.Format("15:04")
+			url := entry.URL
+			if len(url) > 100 {
+				url = url[:97] + "..."
+			}
+			title := strings.TrimSpace(entry.Title)
+			if title == "" {
+				title = "-"
+			}
+			title = shortenTitle(title, 80)
+			// Escape pipe characters in URL and title
+			url = strings.ReplaceAll(url, "|", "%7C")
+			title = strings.ReplaceAll(title, "|", "-")
+			lines = append(lines, fmt.Sprintf("%s | %s | %s", timeStr, url, title))
 		}
+		lines = append(lines, "")
 	}
 
 	activityText := strings.Join(lines, "\n")
 
-	prompt := `You are summarizing browsing history into a structured tag summary.
+	prompt := `You are summarizing browsing history into a structured tag summary for personal journaling.
 
 Rules:
-- Output Markdown only.
+- Output plain Markdown only. No HTML entities (no &nbsp;, &amp;, etc). Use spaces for indentation.
 - Start with: "# Browsing Summary - {start} to {end} ({days} days)".
 - Dynamically create sections based on topic categories found (e.g., **Shopping**, **Development**, **Research**, **Finance**).
-- Only create a section if it has meaningful content; skip sections with few items.
+- STRICT: Only create a section if it has 5+ items total. Merge smaller groups into the most relevant larger section.
 - Group by topic/tag, NOT by site. Site is secondary info.
 - Each line format: "#tag (COUNT) action text [site1.com, site2.com]".
+- ABSOLUTE RULE - SUB-TAGS (STRICTLY ENFORCED):
+  COUNT THE NUMBER. If the tag count is less than 10, it MUST be a single line with NO indented sub-bullets beneath it.
+
+  ✓ CORRECT:
+  #ai-agents (18) explored AI agents
+    - #clawdbot (8) personal AI assistant [clawd.bot]
+    - #ralph (5) autonomous coding loop [github.com/repo]
+  #vscode (3) downloaded VS Code [code.visualstudio.com]
+  #stocks (5) checked NVDA, TSLA charts [finance.yahoo.com]
+  #books (4) read 'Atomic Habits', 'Deep Work' [ridibooks.com]
+
+  ✗ WRONG - these have sub-bullets but count is under 10:
+  #stocks (5) stock charts
+    - #nvda (2) NVIDIA
+  #books (4) browsed books
+    - #fiction (2) fiction
+
+- Sub-tags must sum to LESS than parent total. Skip minor items (1-2 counts).
+- If sub-tags share the same site as parent, put site URL in parent only. Example:
+  #youtube (29) watched various videos [m.youtube.com]
+    - #korean-vlogs (10) watched vlogs about daily life
+    - #running (6) watched videos about Garmin watches for runners
+- Combine very small unrelated tags (1-2 counts each) into one summary line at end of section. Example:
+  #misc-dev (4) downloaded VS Code, checked Remotion, explored Raycast [code.visualstudio.com, remotion.dev, raycast.com]
+- Do NOT list individual webpage titles. Always group into meaningful tags.
 - Tags must be in descending COUNT within each section.
-- Use sites without www; for local URLs use just [localhost].
-- Ignore trivial auth/redirect/login/consent pages.
-- Do not include Gmail.
-- Avoid #misc; categorize Amazon, Digitec, finance.yahoo.com, etc. into proper topic sections.
-- For shopping (Amazon, Digitec, ebay, etc.), prefer phrasing like "compared Garmin watches".
-- Provide action phrases + examples, not just raw titles.
-  Example: "#k-content (12) watched K-content clips like Davichi vlog, Okinawa Summer Escape; … [youtube.com]"
-- Keep titles concise; shorten long ones.
+
+Site references (IMPORTANT):
+- For github.com: ALWAYS include repo path like github.com/steipete/bird, github.com/michaelshimeles/ralphy. NEVER just "github.com"
+- For x.com: ALWAYS include username like x.com/steipete, x.com/clawdbot. NEVER just "x.com"
+- For google maps: mention searched locations/keywords
+- For local URLs: just use [localhost], no IP addresses
+- NEVER repeat the same site/path in brackets.
+
+Ignore completely (not useful for journaling):
+- Authentication, account management, login pages (accounts.google.com, myaccount.google.com, sso.*, login.*, etc.)
+- Redirect, consent, cookie pages
+- Gmail and mail.google.com
+- Unsubscribe pages, email management links (swanbitcoin unsubscribe, etc.)
+- Any URL containing "unsubscribe", "email-preferences", "manage-subscription"
+
+Categorization:
+- Product research (comparing watches, reading reviews) belongs in Shopping, not Research.
+- Use specific meaningful tags: #grocery for food items (not #products), #books for reading, etc.
+- Avoid generic tags like #products, #misc, #general.
+- IMPORTANT: Group by TOPIC, not by site. If browsing Garmin watches on ricardo.ch, include ricardo.ch in #garmin sites list - do NOT create separate #ricardo tag. The tag should reflect WHAT was browsed, not WHERE.
+
+Content detail (CRITICAL - this is for personal journaling to remember what was done):
+- Do NOT give generic descriptions. Provide SPECIFIC details that help recall what was actually consumed.
+- For discussions/tweets: mention specific topics, people, or key points discussed (e.g., "Saylor acquired 22,305 BTC", "debate about risk-on vs risk-off")
+- For books: list book/author names
+- For videos: list specific video topics or titles
+- For articles: mention specific subjects covered
+- For products: list specific models compared
+- The goal is to easily recall what was actually viewed/done - generic summaries are useless.
+  Good: "#crypto (10) Saylor acquired 22,305 BTC at $95k, debate on BTC as risk-on vs risk-off asset, silver decade-long base breakout [x.com/saylor, x.com/JoeConsorti]"
+  Bad: "#crypto (10) followed Bitcoin price discussions and metrics [x.com]"
+  Good: "#books (7) read 'Atomic Habits', browsed 'Deep Work' [ridibooks.com]"
+  Bad: "#ridibooks (7) ebook subscription service and books [ridibooks.com]"
 
 Now produce the summary based on the browsing history below.
 
@@ -88,7 +169,11 @@ func normalizeDomain(url string) string {
 	host = strings.ToLower(host)
 	host = strings.TrimPrefix(host, "www.")
 	// Strip port from localhost URLs (localhost:3000 -> localhost)
-	if strings.HasPrefix(host, "localhost:") {
+	if strings.HasPrefix(host, "localhost:") || strings.HasPrefix(host, "127.0.0.1") || strings.HasPrefix(host, "0.0.0.0") {
+		host = "localhost"
+	}
+	// Local network IPs (e.g., 100.x.x.x, 192.168.x.x, 10.x.x.x) -> localhost
+	if len(host) > 0 && host[0] >= '0' && host[0] <= '9' {
 		host = "localhost"
 	}
 	return host
@@ -99,6 +184,8 @@ func shortenTitle(title string, maxLen int) string {
 	if title == "" {
 		return ""
 	}
+	// Decode HTML entities (e.g., &eacute; -> é)
+	title = html.UnescapeString(title)
 	title = strings.ReplaceAll(title, "\n", " ")
 	title = strings.ReplaceAll(title, "\r", " ")
 	for strings.Contains(title, "  ") {

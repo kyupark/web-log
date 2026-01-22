@@ -13,10 +13,9 @@ import (
 
 // OpenRouter uses OpenAI-compatible API format
 type openRouterRequest struct {
-	Model       string    `json:"model"`
-	Messages    []message `json:"messages"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
-	Temperature float64   `json:"temperature,omitempty"`
+	Model     string    `json:"model"`
+	Messages  []message `json:"messages"`
+	MaxTokens int       `json:"max_tokens,omitempty"`
 }
 
 type message struct {
@@ -36,14 +35,18 @@ type openRouterResponse struct {
 	} `json:"error"`
 }
 
-func callGemini(prompt string) (string, error) {
+func callOpenRouter(prompt string) (string, error) {
+	model := os.Getenv("OPENROUTER_MODEL")
+	if model == "" {
+		model = "google/gemini-2.5-flash"
+	}
+	return callOpenRouterWithModel(prompt, model, 100000)
+}
+
+func callOpenRouterWithModel(prompt string, model string, maxTokens int) (string, error) {
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	if apiKey == "" {
 		return "", errors.New("OPENROUTER_API_KEY is not set")
-	}
-	model := os.Getenv("OPENROUTER_MODEL")
-	if model == "" {
-		model = "google/gemini-2.5-flash-lite"
 	}
 
 	endpoint := "https://openrouter.ai/api/v1/chat/completions"
@@ -52,8 +55,7 @@ func callGemini(prompt string) (string, error) {
 		Messages: []message{
 			{Role: "user", Content: prompt},
 		},
-		MaxTokens:   1200,
-		Temperature: 0.2,
+		MaxTokens: maxTokens,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -67,7 +69,7 @@ func callGemini(prompt string) (string, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: 180 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
