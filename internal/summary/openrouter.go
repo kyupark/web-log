@@ -13,9 +13,10 @@ import (
 
 // OpenRouter uses OpenAI-compatible API format
 type openRouterRequest struct {
-	Model     string    `json:"model"`
-	Messages  []message `json:"messages"`
-	MaxTokens int       `json:"max_tokens,omitempty"`
+	Model       string    `json:"model"`
+	Messages    []message `json:"messages"`
+	MaxTokens   int       `json:"max_tokens,omitempty"`
+	Temperature float64   `json:"temperature"`
 }
 
 type message struct {
