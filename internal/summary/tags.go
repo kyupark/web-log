@@ -55,15 +55,15 @@ func buildPrompt(entries []history.Entry, startDate, endDate string, days int) s
 Rules:
 - Output Markdown only.
 - Start with: "# Browsing Summary - {start} to {end} ({days} days)".
-- Sections: "**Shopping**" first, then "**Other**" for everything else.
-- DO NOT create Social or Video sections; group by topic/tag instead.
+- Dynamically create sections based on topic categories found (e.g., **Shopping**, **Development**, **Research**, **Finance**).
+- Only create a section if it has meaningful content; skip sections with few items.
 - Group by topic/tag, NOT by site. Site is secondary info.
 - Each line format: "#tag (COUNT) action text [site1.com, site2.com]".
-- Tags must be in descending COUNT; #misc must be last.
+- Tags must be in descending COUNT within each section.
 - Use sites without www; for local URLs use just [localhost].
 - Ignore trivial auth/redirect/login/consent pages.
 - Do not include Gmail.
-- #misc should be minimal; re-categorize Amazon, Digitec, finance.yahoo.com, etc. into sensible tags.
+- Avoid #misc; categorize Amazon, Digitec, finance.yahoo.com, etc. into proper topic sections.
 - For shopping (Amazon, Digitec, ebay, etc.), prefer phrasing like "compared Garmin watches".
 - Provide action phrases + examples, not just raw titles.
   Example: "#k-content (12) watched K-content clips like Davichi vlog, Okinawa Summer Escape; … [youtube.com]"
